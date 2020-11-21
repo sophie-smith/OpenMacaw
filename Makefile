@@ -1,7 +1,7 @@
 all: docker
 
-docker_build:
-	docker build --build-arg UID=$(shell id -u) --build-arg GID=$(shell id -g ) -t test .
+docker_build: Dockerfile
+	docker build -t test .
 
-docker:
-	docker run -v $(shell pwd):/src -it test
+docker: docker_build
+	docker run -p 3000:3000 -v $(shell pwd):/src -it test
