@@ -18,6 +18,13 @@
 #include <pthread.h>
 #include <sched.h>  // peafowl
 
+/* For heterogeneity simulation */
+#include <signal.h>
+#include <stdbool.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <time.h>
+
 #ifdef __sun
 #include <atomic.h>
 #endif
@@ -54,6 +61,32 @@ struct conn_queue {
     CQ_ITEM *tail;
     pthread_mutex_t lock;
 };
+
+/* Define type of cores we're using for heterogeneous architecture */
+typedef enum core {
+    SLOW_CORE,
+    MEDIUM_CORE, 
+    FAST_CORE
+} core_t;
+
+/* Array to store type of core, used in create_worker */
+core_t *thread_types;
+
+/* Number of workers */
+int num_threads;
+
+/* Track number of SIGALRM received to differentiate fast vs. slow cores */
+int alarm_received = 0;
+
+/* Routines related to heterogeneity */
+void *scheduler_routine(void *args);
+void alarm_handler(int arg);
+void medium_handler(int arg);
+void slow_handler(int arg) ;
+
+
+/** TODO: determine if signal masks are necessary? Don't want 
+ *  to block unnecessary signals in case used elsewhere? */
 
 /* Locks for cache LRU operations */
 pthread_mutex_t lru_locks[POWER_LARGEST];
@@ -421,6 +454,10 @@ static void create_worker(void *(*func)(void *), void *arg) {
                 strerror(ret));
         exit(1);
     }
+
+    /* Set signal handlers for the thread */
+    signal(SIGUSR1, slow_handler);
+    signal(SIGUSR2, medium_handler);
 }
 
 /*
@@ -1241,7 +1278,7 @@ void memcached_thread_init(int nthreads, void *arg) {
         pthread_mutex_init(&item_locks[i], NULL);
     }
 
-    threads = calloc(nthreads, sizeof(LIBEVENT_THREAD));
+    threads = calloc(nthreads + 1, sizeof(LIBEVENT_THREAD));
     if (! threads) {
         perror("Can't allocate thread descriptors");
         exit(1);
@@ -1300,10 +1337,39 @@ void memcached_thread_init(int nthreads, void *arg) {
     peafowl.transferring_epoch = false;
     peafowl.update_scale_down_worker = true;
 
+    /* Initialize core type, change depending on config desired */
+    thread_types = (core_t*)malloc(sizeof(core_t) * nthreads);
+    assert(thread_types);
+
     /* Create threads after we've done all the libevent setup. */
     for (i = 0; i < nthreads; i++) {
         create_worker(worker_libevent, &threads[i]);
+
+        /** TODO: change this config section when we decide architecture to use */
+        if (i % 3 == 0) {
+            printf("Initializing slow core for %d.\n", i);
+            thread_types[i] = SLOW_CORE;
+        }
+
+        if (i % 3 == 1) {
+            printf("Initializing medium core for %d.\n", i);
+            thread_types[i] = MEDIUM_CORE;
+        }
+
+        if (i % 3 == 2) {
+            printf("Initializing fast core for %d.\n", i);
+            thread_types[i] = FAST_CORE;
+        }
+
     }
+
+    /* Initialize an additional scheduler thread (sends signals to 
+     * the other threads for duty cycling) */
+    // create_worker(worker_libevent, &threads[nthreads]);
+    pthread_t scheduler_id;
+    pthread_create(&scheduler_id, NULL, scheduler_routine, NULL);
+
+    num_threads = nthreads;
 
     /* Wait for all the threads to set themselves up before returning. */
     pthread_mutex_lock(&init_lock);
@@ -1311,3 +1377,79 @@ void memcached_thread_init(int nthreads, void *arg) {
     pthread_mutex_unlock(&init_lock);
 }
 
+void slow_handler(int arg) 
+{
+    printf("Slow Core: entered slow handler.\n");
+
+    /* Sleep for long amount of time */
+    struct timespec sleep_time;
+    sleep_time.tv_sec = 0;
+    sleep_time.tv_nsec = 100;
+
+    nanosleep(&sleep_time, NULL);
+
+}
+
+void medium_handler(int arg)
+{
+    printf("Medium Core: entered medium handler.\n");
+    /* Sleep for short amount of time */
+    struct timespec sleep_time;
+    sleep_time.tv_sec = 0;
+    sleep_time.tv_nsec = 50;
+
+    nanosleep(&sleep_time, NULL);
+
+}
+
+
+void alarm_handler(int arg)
+{
+    printf("Scheduler: handled SIGALRM.\n");
+
+    for (int i = 0; i < num_threads; i++) {
+        printf("Sending signal to thread %d.\n", i);
+        if (alarm_received % 2 == 0) {
+            if (thread_types[i] == SLOW_CORE) {
+                printf("Sent SIGUSR1 to %d\n", i);
+                pthread_kill(threads[i].thread_id, SIGUSR1);
+            }
+        }
+
+        if (thread_types[i] == MEDIUM_CORE) {
+            printf("Sent SIGUSR2 to %d\n", i);
+            pthread_kill(threads[i].thread_id, SIGUSR2);
+        }
+    }
+        
+    alarm_received++;
+
+}
+
+/** 
+ * @brief Scheduling thread routine, uses virtual timer 
+ * to determine when to signal other threads 
+ */
+void *scheduler_routine(void *args)
+{
+    printf("Enter scheduler.\n");
+    /* Set SIGALRM handler */
+    signal(SIGALRM, alarm_handler);
+
+    struct itimerval it;
+    it.it_value.tv_sec = 10;
+    it.it_value.tv_usec = 0;
+    it.it_interval = it.it_value;
+
+    /* Configure the virtual timer */
+    if (setitimer(ITIMER_REAL, &it, NULL) < 0) {
+        perror("setitimer");
+        return NULL;
+    }
+
+    while (true) {
+        pause();
+    }
+
+    return NULL;
+}
