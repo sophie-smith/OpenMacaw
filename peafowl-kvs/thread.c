@@ -93,6 +93,10 @@ typedef struct core_info {
     /* Power consumption value associated with each core, lower value
      * associated with a smaller (slower) core */
     int power_consumption;
+
+    /* Estimate performance for each core, basically large implies gets
+     * more work done or work completed quicker */
+    int performance;
 } core_info_t;
 
 /* Array to store type of core, used in create_worker */
@@ -595,7 +599,26 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                         }
                         break;
                     case PERFORMANCE:
-                        /** TODO: implement this approach */
+                        /* Scale down worker selected as the worker with the latest finish time since that's
+                         * assumed to slow overall completion time of all cores */
+                        double max_finish_time = 0.0;
+                        for (int i = 0; i < settings.num_threads; i++) {
+                            if (threads[i].active  &&  threads[i].idle_state_enabled) {
+                                cpuidle_states_disable(i+1,1);
+                                threads[i].idle_state_enabled = false;
+                            }
+
+                            /* Calculate the finish time and keep track of max */
+                            double curr_finish_time = threads[i].current_load / 
+                                ((double)thread_types[i].performance);
+
+                            if (curr_finish_time > max_finish_time) {
+                                max_finish_time = curr_finish_time;
+                                /* Update scale down worker to new worker with greater finish time */
+                                peafowl.scale_down_worker = i;
+                            }
+                        }
+
                         break;
                     default:
                         printf("Invalid scaledown mode selected.\n");
@@ -658,6 +681,25 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                     }
                     break;
                 case PERFORMANCE:
+                    /* Assign connections to workers by approximating the latest finish 
+                     * time of the workers */
+                    double max_finish_time = 0.0;
+
+                    for (int j = 0; j < settings.num_threads; j++) {
+                        if (!threads[j].active || j == peafowl.scale_down_worker
+                            || threads[j].ignored_time_window < 1) continue;
+
+                        /* Compute finish time of current worker, compare to greatest
+                         * which would be the currently set destination worker */
+                        double curr_finish_time = threads[j].current_load / 
+                            ((double)thread_types[j].performance);
+                        
+                        if (curr_finish_time > max_finish_time) {
+                            max_finish_time = curr_finish_time;
+                            peafowl.destination_worker = j;
+                        }
+                    }
+
                     break;
                 default:
                     printf("Invalid scaledown mode selected.\n");
@@ -1487,21 +1529,26 @@ void memcached_thread_init(int nthreads, void *arg) {
                 if (i % 3 == 0) {
                     thread_types[i].id = FAST_CORE;
                     thread_types[i].power_consumption = fast_power;
+                    thread_types[i].performance = fast_power;
                 } else {
                     thread_types[i].id = SLOW_CORE;
                     thread_types[i].power_consumption = slow_power;
+                    thread_types[i].performance = slow_power;
                 }
                 break;
             case ARCHITECTURE_TWO:
                 if (i % 6 == 0) {
                     thread_types[i].id = FAST_CORE;
                     thread_types[i].power_consumption = fast_power;
+                    thread_types[i].performance = fast_power;
                 } else if (i % 6 < 3) {
                     thread_types[i].id = MEDIUM_CORE;
                     thread_types[i].power_consumption = medium_power;
+                    thread_types[i].performance = medium_power;
                 } else {
                     thread_types[i].id = SLOW_CORE;
                     thread_types[i].power_consumption = slow_power;
+                    thread_types[i].performance = slow_power;
                 }
                 break;
 
