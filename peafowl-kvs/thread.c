@@ -62,6 +62,16 @@ struct conn_queue {
     pthread_mutex_t lock;
 };
 
+/* Define type of architecture we're using */
+typedef enum arch {
+    ARCHITECTURE_ONE, /* 1:2 fast:slow */
+    ARCHITECTURE_TWO, /* 1:2:3, fast:medium:slow */
+    ARCHITECTURE_THREE /* All slow cores (not heterogeneous) */
+} arch_t;
+
+/* Select current architecture to use */
+arch_t current_arch = ARCHITECTURE_THREE;
+
 /* Define type of cores we're using for heterogeneous architecture */
 typedef enum core {
     SLOW_CORE,
@@ -69,8 +79,24 @@ typedef enum core {
     FAST_CORE
 } core_t;
 
+typedef enum scaledown {
+    CLASSIC, /* Original scale down algorithm */
+    ENERGY, /* Energy-constrained scale down */
+    PERFORMANCE /* Performance-aware scale down */
+} scaledown_t;
+
+/* Current used scale down algorithm */
+scaledown_t scaledown_mode = CLASSIC;
+
+typedef struct core_info {
+    core_t id;
+    /* Power consumption value associated with each core, lower value
+     * associated with a smaller (slower) core */
+    int power_consumption;
+} core_info_t;
+
 /* Array to store type of core, used in create_worker */
-core_t *thread_types;
+core_info_t *thread_types;
 
 /* Number of workers */
 int num_threads;
@@ -488,6 +514,9 @@ void peafowl_reset_sched_stats(void){
 /**
  * peafowl scheduler. It gets signals for worker threads to update the load
  * based on the load and capacity of the workers, peafowl determines the scale-down and the scale-up workers
+ * 
+ * Location to change the scale down algorithm to include heterogeneity-aware scheduling 
+ * 
  * @param fd
  * @param which
  * @param arg
@@ -509,30 +538,132 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
             }
 
             if (peafowl.update_scale_down_worker) {
-                /* find  the scale_down worker ( the worker with the lowest load) */
-                for (int i = 0; i < settings.num_threads; i++) {
-                    if (threads[i].active  &&  threads[i].idle_state_enabled) {
-                        cpuidle_states_disable(i+1,1);
-                        threads[i].idle_state_enabled = false;
-                    }
-                    if (threads[i].active && threads[i].ignored_time_window < 1) {
-                        if (threads[i].current_load < threads[peafowl.scale_down_worker].current_load || !threads[peafowl.scale_down_worker].active || threads[peafowl.scale_down_worker].ignored_time_window > 0) {
-                            peafowl.scale_down_worker = i;
+
+                switch (scaledown_mode) {
+                    case CLASSIC:
+                        /* find  the scale_down worker ( the worker with the lowest load) */
+                        for (int i = 0; i < settings.num_threads; i++) {
+                            if (threads[i].active  &&  threads[i].idle_state_enabled) {
+                                cpuidle_states_disable(i+1,1);
+                                threads[i].idle_state_enabled = false;
+                            }
+                            if (threads[i].active && threads[i].ignored_time_window < 1) {
+
+                                /* Original approach is to use the lowest load worker as the scale down worker
+                                * because involves reassigning fewer connections */
+                                if (threads[i].current_load < threads[peafowl.scale_down_worker].current_load 
+                                    || !threads[peafowl.scale_down_worker].active 
+                                    || threads[peafowl.scale_down_worker].ignored_time_window > 0) {
+
+                                    peafowl.scale_down_worker = i;
+                                }
+                            }
                         }
-                    }
+                        break;
+                    case ENERGY:
+                        /* Select fastest core, use load as tie breaker */
+                        for (int i = 0; i < settings.num_threads; i++) {
+                            if (threads[i].active  &&  threads[i].idle_state_enabled) {
+                                cpuidle_states_disable(i+1,1);
+                                threads[i].idle_state_enabled = false;
+                            }
+
+                            if (threads[i].active && threads[i].ignored_time_window < 1) {
+                                /* Handle invalid states for scale down worker */
+                                if (!threads[peafowl.scale_down_worker].active || 
+                                    threads[peafowl.scale_down_worker].ignored_time_window > 0) {
+                                    peafowl.scale_down_worker = i;
+                                    continue;
+                                }
+
+                                /* If faster core, select as scaledown regardless of load, since
+                                 * bigger core consumes more energy */
+                                if (thread_types[i].id > thread_types[peafowl.scale_down_worker].id) {
+                                    peafowl.scale_down_worker = i;
+                                    continue;
+                                }
+
+                                /* Same core type, use least load as tie breaker */
+                                if (thread_types[i].id == thread_types[peafowl.scale_down_worker].id) {
+                                    if (threads[i].current_load < threads[peafowl.scale_down_worker].current_load) {
+                                        peafowl.scale_down_worker = i;
+                                        continue;
+                                    }
+                                }
+                                
+                            }
+                        }
+                        break;
+                    case PERFORMANCE:
+                        /** TODO: implement this approach */
+                        break;
+                    default:
+                        printf("Invalid scaledown mode selected.\n");
+                        break;
                 }
             }
 
-            /* find the destination worker  and total available capacity */
-            double total_capacity = 0;
-            for(int j = 0; j < settings.num_threads; j++) {
-                if (threads[j].active && j != peafowl.scale_down_worker  && threads[j].ignored_time_window < 1) {
-                    total_capacity += threads[j].capacity;
-                    if (threads[j].capacity >  threads[peafowl.destination_worker].capacity || peafowl.destination_worker ==  peafowl.scale_down_worker) {
-                        peafowl.destination_worker = j;
+            /* Determine the destination worker */
+            switch (scaledown_mode) {
+                case CLASSIC:
+                    /* find the destination worker  and total available capacity */
+                    /* Chooses one destination worker per function call */
+                    double total_capacity = 0;
+                    for(int j = 0; j < settings.num_threads; j++) {
+                        if (threads[j].active && j != peafowl.scale_down_worker  && threads[j].ignored_time_window < 1) {
+                            total_capacity += threads[j].capacity;
+
+                            /* Picks the destination worker to assign connection to as the worker with the 
+                            * greatest available capacity */
+                            if (threads[j].capacity >  threads[peafowl.destination_worker].capacity 
+                                || peafowl.destination_worker ==  peafowl.scale_down_worker) {
+                                    
+                                peafowl.destination_worker = j;
+                            }
+                        }
                     }
-                }
+                    break;
+                case ENERGY:
+
+                    double selected_energy = thread_types[peafowl.destination_worker].power_consumption;
+
+                    /* Spare capacity of curr selected destination */
+                    int selected_spare = threads[peafowl.destination_worker].capacity; 
+
+                    for (int j = 0; j < settings.num_threads; j++) {
+                        if (!threads[j].active || j == peafowl.scale_down_worker
+                            || threads[j].ignored_time_window < 1) continue;
+
+                        /* If current capacity is within [25%, 25%] window of most spare capacity
+                         * consider "good enough" to compute energy efficiency */
+                        int curr_capacity = threads[j].capacity;
+                        double curr_energy = 0.0;
+                        
+                        int lower_bound = selected_spare - (selected_spare / 4);
+                        int upper_bound = selected_spare + (selected_spare / 4);
+
+                        if (lower_bound <= curr_capacity && curr_capacity <= upper_bound) {
+                            curr_energy = ((double)thread_types[j].power_consumption) / 
+                                ((double)curr_capacity);
+
+                            /* Select as dest worker if decreases energy consumption */
+                            if (curr_energy < selected_energy) {
+                                selected_energy = curr_energy;
+                                selected_spare = curr_capacity;
+                                peafowl.destination_worker = j;
+                            }
+                        }
+
+                        
+                    }
+                    break;
+                case PERFORMANCE:
+                    break;
+                default:
+                    printf("Invalid scaledown mode selected.\n");
+                    break;
             }
+
 
             if( peafowl.destination_worker ==  peafowl.scale_down_worker) {
                 return;
@@ -1338,27 +1469,51 @@ void memcached_thread_init(int nthreads, void *arg) {
     peafowl.update_scale_down_worker = true;
 
     /* Initialize core type, change depending on config desired */
-    thread_types = (core_t*)malloc(sizeof(core_t) * nthreads);
+    thread_types = (core_info_t*)malloc(sizeof(core_info_t) * nthreads);
     assert(thread_types);
+
+    /* Define power consumption values */
+    /** TODO: decide on these constants here */
+    const int slow_power = 100;
+    const int medium_power = 200;
+    const int fast_power = 400;
 
     /* Create threads after we've done all the libevent setup. */
     for (i = 0; i < nthreads; i++) {
         create_worker(worker_libevent, &threads[i]);
 
-        /** TODO: change this config section when we decide architecture to use */
-        if (i % 3 == 0) {
-            printf("Initializing slow core for %d.\n", i);
-            thread_types[i] = SLOW_CORE;
-        }
+        switch (current_arch) {
+            case ARCHITECTURE_ONE:
+                if (i % 3 == 0) {
+                    thread_types[i].id = FAST_CORE;
+                    thread_types[i].power_consumption = fast_power;
+                } else {
+                    thread_types[i].id = SLOW_CORE;
+                    thread_types[i].power_consumption = slow_power;
+                }
+                break;
+            case ARCHITECTURE_TWO:
+                if (i % 6 == 0) {
+                    thread_types[i].id = FAST_CORE;
+                    thread_types[i].power_consumption = fast_power;
+                } else if (i % 6 < 3) {
+                    thread_types[i].id = MEDIUM_CORE;
+                    thread_types[i].power_consumption = medium_power;
+                } else {
+                    thread_types[i].id = SLOW_CORE;
+                    thread_types[i].power_consumption = slow_power;
+                }
+                break;
 
-        if (i % 3 == 1) {
-            printf("Initializing medium core for %d.\n", i);
-            thread_types[i] = MEDIUM_CORE;
-        }
+            case ARCHITECTURE_THREE:
+                /* All slow to represent not heterogeneous */
+                thread_types[i].id = SLOW_CORE;
+                thread_types[i].power_consumption = slow_power;
+                break;
 
-        if (i % 3 == 2) {
-            printf("Initializing fast core for %d.\n", i);
-            thread_types[i] = FAST_CORE;
+            default:
+                printf("Error: architecture not recognized.\n");
+                break;
         }
 
     }
