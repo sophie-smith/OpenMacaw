@@ -648,7 +648,7 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                 case CLASSIC:
                     /* find the destination worker  and total available capacity */
                     /* Chooses one destination worker per function call */
-                    for (int j = 0; i < settings.num_threads; j++) {
+                    for (int j = 0; j < settings.num_threads; j++) {
                         /* Picks the destination worker to assign connection to as the worker with the 
                         * greatest available capacity */
                         if (threads[j].capacity >  threads[peafowl.destination_worker].capacity 
