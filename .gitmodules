@@ -1,0 +1,3 @@
+[submodule "Peafowl/peafowl-kvs"]
+	path = Peafowl/peafowl-kvs
+	url = https://github.com/showanasyabi/peafowl-kvs

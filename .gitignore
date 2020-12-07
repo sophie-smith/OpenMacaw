@@ -1,0 +1,7 @@
+*.gcno
+memcached
+memcached-debug
+sizes
+testapp
+timedrun
+*.log
