@@ -534,6 +534,14 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
             fprintf(stderr, "Can't read from libevent pipe\n");
         return;
     }
+
+    /* Pre-defined variables used for energy and performanced based approaches */
+    double max_finish_time; 
+    double total_capacity;
+    double selected_energy;
+    int selected_spare;
+    double curr_finish_time;
+
     switch (buf[0]) {
         case 'u':
             /* a connection is being transferred. No scheduling happens until the transfer is done */
@@ -601,7 +609,7 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                     case PERFORMANCE:
                         /* Scale down worker selected as the worker with the latest finish time since that's
                          * assumed to slow overall completion time of all cores */
-                        double max_finish_time = 0.0;
+                        max_finish_time = 0.0;
                         for (int i = 0; i < settings.num_threads; i++) {
                             if (threads[i].active  &&  threads[i].idle_state_enabled) {
                                 cpuidle_states_disable(i+1,1);
@@ -609,7 +617,7 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                             }
 
                             /* Calculate the finish time and keep track of max */
-                            double curr_finish_time = threads[i].current_load / 
+                            curr_finish_time = threads[i].current_load / 
                                 ((double)thread_types[i].performance);
 
                             if (curr_finish_time > max_finish_time) {
@@ -626,32 +634,36 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                 }
             }
 
+
+            /* Compute the total capacity */
+            total_capacity = 0;
+            for (int j = 0; j < settings.num_threads; j++) {
+                if (threads[j].active && j != peafowl.scale_down_worker  && threads[j].ignored_time_window < 1) {
+                    total_capacity += threads[j].capacity;
+                }
+            }
+
             /* Determine the destination worker */
             switch (scaledown_mode) {
                 case CLASSIC:
                     /* find the destination worker  and total available capacity */
                     /* Chooses one destination worker per function call */
-                    double total_capacity = 0;
-                    for(int j = 0; j < settings.num_threads; j++) {
-                        if (threads[j].active && j != peafowl.scale_down_worker  && threads[j].ignored_time_window < 1) {
-                            total_capacity += threads[j].capacity;
-
-                            /* Picks the destination worker to assign connection to as the worker with the 
-                            * greatest available capacity */
-                            if (threads[j].capacity >  threads[peafowl.destination_worker].capacity 
-                                || peafowl.destination_worker ==  peafowl.scale_down_worker) {
-                                    
-                                peafowl.destination_worker = j;
-                            }
+                    for (int j = 0; i < settings.num_threads; j++) {
+                        /* Picks the destination worker to assign connection to as the worker with the 
+                        * greatest available capacity */
+                        if (threads[j].capacity >  threads[peafowl.destination_worker].capacity 
+                            || peafowl.destination_worker ==  peafowl.scale_down_worker) {
+                                
+                            peafowl.destination_worker = j;
                         }
                     }
                     break;
                 case ENERGY:
 
-                    double selected_energy = thread_types[peafowl.destination_worker].power_consumption;
+                    selected_energy = (double)thread_types[peafowl.destination_worker].power_consumption;
 
                     /* Spare capacity of curr selected destination */
-                    int selected_spare = threads[peafowl.destination_worker].capacity; 
+                    selected_spare = threads[peafowl.destination_worker].capacity; 
 
                     for (int j = 0; j < settings.num_threads; j++) {
                         if (!threads[j].active || j == peafowl.scale_down_worker
@@ -683,7 +695,7 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                 case PERFORMANCE:
                     /* Assign connections to workers by approximating the latest finish 
                      * time of the workers */
-                    double max_finish_time = 0.0;
+                    max_finish_time = 0.0;
 
                     for (int j = 0; j < settings.num_threads; j++) {
                         if (!threads[j].active || j == peafowl.scale_down_worker
@@ -691,7 +703,7 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
 
                         /* Compute finish time of current worker, compare to greatest
                          * which would be the currently set destination worker */
-                        double curr_finish_time = threads[j].current_load / 
+                        curr_finish_time = threads[j].current_load / 
                             ((double)thread_types[j].performance);
                         
                         if (curr_finish_time > max_finish_time) {
@@ -1612,13 +1624,13 @@ void alarm_handler(int arg)
     for (int i = 0; i < num_threads; i++) {
         printf("Sending signal to thread %d.\n", i);
         if (alarm_received % 2 == 0) {
-            if (thread_types[i] == SLOW_CORE) {
+            if (thread_types[i].id == SLOW_CORE) {
                 printf("Sent SIGUSR1 to %d\n", i);
                 pthread_kill(threads[i].thread_id, SIGUSR1);
             }
         }
 
-        if (thread_types[i] == MEDIUM_CORE) {
+        if (thread_types[i].id == MEDIUM_CORE) {
             printf("Sent SIGUSR2 to %d\n", i);
             pthread_kill(threads[i].thread_id, SIGUSR2);
         }
