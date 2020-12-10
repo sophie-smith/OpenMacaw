@@ -1663,9 +1663,10 @@ void slow_handler(int arg)
     nanosleep(&sleep_time, NULL);
     
     /* Gradually adjust DVFS value */
-    thread_types[curr_id].dvfs_scale *= 1000;
-    if (thread_types[curr_id].dvfs_scale > 999999999) {
+    if (thread_types[curr_id].dvfs_scale >= (999000000)) {
         thread_types[curr_id].dvfs_scale = 999999999;
+    } else {
+        thread_types[curr_id].dvfs_scale *= 1000;
     }
 
 }
