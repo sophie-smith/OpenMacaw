@@ -1528,9 +1528,9 @@ void memcached_thread_init(int nthreads, void *arg) {
 
     /* Define power consumption values */
     /** TODO: decide on these constants here */
-    const int slow_power = 100;
-    const int medium_power = 200;
-    const int fast_power = 400;
+    const int slow_power = 50;
+    const int medium_power = 75;
+    const int fast_power = 100;
 
     /* Create threads after we've done all the libevent setup. */
     for (i = 0; i < nthreads; i++) {
