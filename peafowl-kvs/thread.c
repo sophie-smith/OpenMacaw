@@ -1597,8 +1597,8 @@ void slow_handler(int arg)
 
     /* Sleep for long amount of time */
     struct timespec sleep_time;
-    sleep_time.tv_sec = 0;
-    sleep_time.tv_nsec = 100;
+    sleep_time.tv_sec = 5;
+    sleep_time.tv_nsec = 0;
 
     nanosleep(&sleep_time, NULL);
 
@@ -1609,8 +1609,8 @@ void medium_handler(int arg)
     printf("Medium Core: entered medium handler.\n");
     /* Sleep for short amount of time */
     struct timespec sleep_time;
-    sleep_time.tv_sec = 0;
-    sleep_time.tv_nsec = 50;
+    sleep_time.tv_sec = 2;
+    sleep_time.tv_nsec = 0;
 
     nanosleep(&sleep_time, NULL);
 
@@ -1623,12 +1623,12 @@ void alarm_handler(int arg)
 
     for (int i = 0; i < num_threads; i++) {
         printf("Sending signal to thread %d.\n", i);
-        if (alarm_received % 2 == 0) {
+        // if (alarm_received % 2 == 0) {
             if (thread_types[i].id == SLOW_CORE) {
                 printf("Sent SIGUSR1 to %d\n", i);
                 pthread_kill(threads[i].thread_id, SIGUSR1);
             }
-        }
+        // }
 
         if (thread_types[i].id == MEDIUM_CORE) {
             printf("Sent SIGUSR2 to %d\n", i);
