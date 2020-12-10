@@ -618,7 +618,7 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
 
                             /* Calculate the finish time and keep track of max */
                             curr_finish_time = threads[i].current_load / 
-                                ((double)thread_types[i].performance);
+                                ((double)thread_types[i].performance / 2);
 
                             if (curr_finish_time > max_finish_time) {
                                 max_finish_time = curr_finish_time;
@@ -697,19 +697,29 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                      * time of the workers */
                     max_finish_time = 0.0;
 
+                    double optimal_load = threads[peafowl.destination_worker].current_load;
+
                     for (int j = 0; j < settings.num_threads; j++) {
                         if (!threads[j].active || j == peafowl.scale_down_worker
                             || threads[j].ignored_time_window < 1) continue;
 
-                        /* Compute finish time of current worker, compare to greatest
-                         * which would be the currently set destination worker */
-                        curr_finish_time = threads[j].current_load / 
-                            ((double)thread_types[j].performance);
-                        
-                        if (curr_finish_time > max_finish_time) {
-                            max_finish_time = curr_finish_time;
-                            peafowl.destination_worker = j;
+                        int lower_bound = optimal_load - (optimal_load / 4);
+                        int upper_bound = optimal_load + (optimal_load / 4);
+
+                        int curr_load = threads[j].current_load;
+
+                        if (lower_bound <= curr_load && curr_load <= upper_bound) {
+                            /* Compute finish time of current worker, compare to greatest
+                             * which would be the currently set destination worker */
+                            curr_finish_time = threads[j].current_load / 
+                                ((double)thread_types[j].performance);
+                            
+                            if (curr_finish_time > max_finish_time) {
+                                max_finish_time = curr_finish_time;
+                                peafowl.destination_worker = j;
+                            }
                         }
+
                     }
 
                     break;
