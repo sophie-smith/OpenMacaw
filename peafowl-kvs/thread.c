@@ -88,6 +88,14 @@ typedef enum scaledown {
 /* Current used scale down algorithm */
 scaledown_t scaledown_mode = CLASSIC;
 
+typedef enum new_connection {
+    CLASSIC, /* Original round-robin assignment of new connections */
+    HET_LOAD_BALANCING /* Providing new requests to the faster core */
+} new_connection_t;
+
+/* Currently used type of assignment for new connections */
+new_connection_t new_connections_mode = CLASSIC;
+
 typedef struct core_info {
     core_t id;
     /* Power consumption value associated with each core, lower value
@@ -1154,7 +1162,34 @@ void dispatch_conn_new(int sfd, enum conn_states init_state, int event_flags,
         return;
     }
 
-    int tid = (last_thread + 1) % settings.num_threads;
+    /* Select a thread for the new connection */
+    int tid = last_thread; // default to last thread
+    switch (new_connections_mode) {
+        case CLASSIC:
+            tid = (last_thread + 1) % settings.num_threads;
+            break;
+        case HET_LOAD_BALANCING:
+            /* Give priority to the faster core, using load as a tie breaker */
+            for (int i = 0; i < settings.num_threads; i++) {
+
+                /* If we come across a faster core, prioritize */
+                if (thread_types[i].id > thread_types[tid].id) {
+                    tid = i;
+                    continue;
+                }
+                
+                /* Coming across same core type - use least load as tie breaker */
+                if (thread_types[i].id == thread_types[tid].id) {
+                    if (threads[i].current_load < threads[tid].current_load) {
+                        tid = i;
+                        continue;
+                    }
+                }
+            }
+        default:
+            printf("Invalid new requests assignment mode selected.\n");
+            break;
+    }
 
     LIBEVENT_THREAD *thread = threads + tid;
 
