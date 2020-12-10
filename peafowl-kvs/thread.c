@@ -610,32 +610,32 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                     case PERFORMANCE:
                         /* Scale down worker selected as the worker with the latest finish time since that's
                          * assumed to slow overall completion time of all cores */
-                        // max_finish_time = 0.0;
-                        // for (int i = 0; i < settings.num_threads; i++) {
-                        //     if (threads[i].active  &&  threads[i].idle_state_enabled) {
-                        //         cpuidle_states_disable(i+1,1);
-                        //         threads[i].idle_state_enabled = false;
-                        //     }
+                        max_finish_time = 0.0;
+                        for (int i = 0; i < settings.num_threads; i++) {
+                            if (threads[i].active  &&  threads[i].idle_state_enabled) {
+                                cpuidle_states_disable(i+1,1);
+                                threads[i].idle_state_enabled = false;
+                            }
 
-                        //     /* Calculate the finish time and keep track of max */
-                        //     curr_finish_time = threads[i].current_load / 
-                        //         ((double)thread_types[i].performance / 2);
+                            /* Calculate the finish time and keep track of max */
+                            curr_finish_time = threads[i].current_load / 
+                                ((double)thread_types[i].performance / 2);
 
-                        //     if (curr_finish_time > max_finish_time) {
-                        //         max_finish_time = curr_finish_time;
-                        //         /* Update scale down worker to new worker with greater finish time */
-                        //         peafowl.scale_down_worker = i;
-                        //     }
-                        // }
+                            if (curr_finish_time > max_finish_time) {
+                                max_finish_time = curr_finish_time;
+                                /* Update scale down worker to new worker with greater finish time */
+                                peafowl.scale_down_worker = i;
+                            }
+                        }
 
                         /* Try to change to use the core with least load to better account
                          * for scheduling overhead, etc. */
-                        for (int i = 0; i < num_threads; i++) {
-                            if (threads[i].current_load < threads[peafowl.scale_down_worker].current_load) {
-                                peafowl.scale_down_worker = i;
-                                continue;
-                            }
-                        }
+                        // for (int i = 0; i < num_threads; i++) {
+                        //     if (threads[i].current_load < threads[peafowl.scale_down_worker].current_load) {
+                        //         peafowl.scale_down_worker = i;
+                        //         continue;
+                        //     }
+                        // }
 
 
                         break;
