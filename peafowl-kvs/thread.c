@@ -1624,7 +1624,7 @@ void alarm_handler(int arg)
     for (int i = 0; i < num_threads; i++) {
         printf("Sending signal to thread %d.\n", i);
         // if (alarm_received % 2 == 0) {
-            if (thread_types[i] == SLOW_CORE) {
+            if (thread_types[i].id == SLOW_CORE) {
                 printf("Sent SIGUSR1 to %d\n", i);
                 pthread_kill(threads[i].thread_id, SIGUSR1);
             }
