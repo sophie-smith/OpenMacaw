@@ -3773,6 +3773,7 @@ static void drive_machine(conn *c) {
          /* deactivate the worker if it has lost all of its connections */
         if(c->thread->num_active_conn < 1) {
             c->thread->num_active_conn = 0;
+            /* Can select another scale down worker since finished scaling down previous selection */
             peafowl.update_scale_down_worker = true;
             c->thread->active = false;
             peafowl.num_active_workers --;
