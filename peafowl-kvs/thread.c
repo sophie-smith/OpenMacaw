@@ -1608,7 +1608,7 @@ void slow_handler(int arg)
         }
     }
 
-    dvfs_mode_t curr_dvfs_mode = thread_types[curr_id].dvfs_mode;
+    dvfs_mode_t curr_dvfs_mode = thread_types[curr_id].dvfs_setting;
 
     /* Amount of time to sleep for */
     struct timespec sleep_time;
