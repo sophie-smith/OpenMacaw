@@ -1654,7 +1654,7 @@ void slow_handler(int arg)
             }
             break;
         default:
-            print("Unknown core type.\n");
+            printf("Unknown core type.\n");
     }
 
     /* Sleep the configured amount of time */

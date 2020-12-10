@@ -76,36 +76,8 @@ static ssize_t tcp_write(conn *arg, void *buf, size_t count);
 
 /* DVFS Changes */
 
-/* Value used to tell if no dvfs, increase frequency, 
- * or decrease frequency as part of dvfs is enabled */
-typedef enum dvfs_mode {
-    LESS_DVFS, /* Decrease core frequency */
-    MORE_DVFS, /* Increase core frequency */
-    NO_DVFS /* Don't use DVFS */
-} dvfs_mode_t;
 
 bool dvfs_testing = false;
-
-/* Define type of cores we're using for heterogeneous architecture */
-typedef enum core {
-    SLOW_CORE,
-    MEDIUM_CORE, 
-    FAST_CORE
-} core_t;
-
-typedef struct core_info {
-    core_t id;
-    /* Power consumption value associated with each core, lower value
-     * associated with a smaller (slower) core */
-    int power_consumption;
-
-    /* Estimate performance for each core, basically large implies gets
-     * more work done or work completed quicker */
-    int performance;
-
-    dvfs_mode_t dvfs_setting;
-    int dvfs_scale;
-} core_info_t;
 
 /* Array to store type of core, used in create_worker */
 core_info_t *thread_types;
