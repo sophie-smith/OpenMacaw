@@ -541,6 +541,7 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
     double selected_energy;
     int selected_spare;
     double curr_finish_time;
+    double optimal_load;
 
     switch (buf[0]) {
         case 'u':
@@ -706,7 +707,7 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                     /* Assign connections to workers by approximating the latest finish 
                      * time of the workers */
 
-                    double optimal_load = threads[peafowl.destination_worker].current_load;
+                    optimal_load = threads[peafowl.destination_worker].current_load;
 
                     max_finish_time = optimal_load; /* Default starting value */
 
