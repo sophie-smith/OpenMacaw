@@ -72,13 +72,6 @@ typedef enum arch {
 /* Select current architecture to use */
 arch_t current_arch = ARCHITECTURE_ONE;
 
-/* Define type of cores we're using for heterogeneous architecture */
-typedef enum core {
-    SLOW_CORE,
-    MEDIUM_CORE, 
-    FAST_CORE
-} core_t;
-
 typedef enum scaledown {
     CLASSIC, /* Original scale down algorithm */
     ENERGY, /* Energy-constrained scale down */

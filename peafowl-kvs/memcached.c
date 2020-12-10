@@ -86,6 +86,13 @@ typedef enum dvfs_mode {
 
 bool dvfs_testing = false;
 
+/* Define type of cores we're using for heterogeneous architecture */
+typedef enum core {
+    SLOW_CORE,
+    MEDIUM_CORE, 
+    FAST_CORE
+} core_t;
+
 typedef struct core_info {
     core_t id;
     /* Power consumption value associated with each core, lower value
