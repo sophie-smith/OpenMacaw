@@ -1613,7 +1613,7 @@ void slow_handler(int arg)
     /* Amount of time to sleep for */
     struct timespec sleep_time;
 
-    printf("Thread %d has dvfs scale of %d\n", curr_id, thread_types[curr_id].dvfs_scale);
+    printf("Thread %d has dvfs scale of %d with mode %d\n", curr_id, thread_types[curr_id].dvfs_scale, curr_dvfs_mode);
 
     switch (thread_types[curr_id].id) {
         case FAST_CORE:
