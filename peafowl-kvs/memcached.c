@@ -74,6 +74,50 @@ static ssize_t tcp_read(conn *arg, void *buf, size_t count);
 static ssize_t tcp_sendmsg(conn *arg, struct msghdr *msg, int flags);
 static ssize_t tcp_write(conn *arg, void *buf, size_t count);
 
+/* DVFS Changes */
+
+/* Value used to tell if no dvfs, increase frequency, 
+ * or decrease frequency as part of dvfs is enabled */
+typedef enum dvfs_mode {
+    LESS_DVFS, /* Decrease core frequency */
+    MORE_DVFS, /* Increase core frequency */
+    NO_DVFS /* Don't use DVFS */
+} dvfs_mode_t;
+
+bool dvfs_testing = false;
+
+typedef struct core_info {
+    core_t id;
+    /* Power consumption value associated with each core, lower value
+     * associated with a smaller (slower) core */
+    int power_consumption;
+
+    /* Estimate performance for each core, basically large implies gets
+     * more work done or work completed quicker */
+    int performance;
+
+    dvfs_mode_t dvfs_setting;
+    int dvfs_scale;
+} core_info_t;
+
+/* Array to store type of core, used in create_worker */
+core_info_t *thread_types;
+
+void enable_dvfs_decrease(int id) {
+    thread_types[id].dvfs_scale = 999;
+    thread_types[id].dvfs_setting = LESS_DVFS;
+}
+
+void enable_dvfs_increase(int id) {
+    thread_types[id].dvfs_scale = 999;
+    thread_types[id].dvfs_setting = MORE_DVFS;
+}
+
+void disable_dvfs(int id) {
+    thread_types[id].dvfs_scale = 0;
+    thread_types[id].dvfs_setting = NO_DVFS;
+}
+
 
 enum try_read_result {
     READ_DATA_RECEIVED,
@@ -3494,6 +3538,11 @@ static void drive_machine(conn *c) {
             if (current_time - c->last_sampling_time >= peafowl.monitoring_period) {
                 if (c->on_load) {
                     c->thread->current_load -= c->rate;
+                    if (dvfs_testing) {
+                        if (c->thread->current_load < 0.3 * c->thread->peak_load) {
+                            enable_dvfs_decrease(c->thread->index);
+                        }
+                    }
                     if (!c->is_guest) {
                         c->thread->resident_load -= c->rate;
                     }
@@ -3725,6 +3774,12 @@ static void drive_machine(conn *c) {
             c->thread->current_load -= c->rate;
             c->thread->num_active_conn --;
 
+            if (dvfs_testing) {
+                if (c->thread->current_load < 0.3 * c->thread->peak_load) {
+                    enable_dvfs_decrease(c->thread->index);
+                }
+            }
+
             if (c->thread->current_load < 0) {
                 c->thread->current_load = 0;
             }
@@ -3770,6 +3825,13 @@ static void drive_machine(conn *c) {
         if(c->thread->current_load < 0) {
             c->thread->current_load = 0;
         }
+
+        if (dvfs_testing) {
+            if (c->thread->current_load < 0.3 * c->thread->peak_load) {
+                enable_dvfs_decrease(c->thread->index);
+            }
+        }
+
          /* deactivate the worker if it has lost all of its connections */
         if(c->thread->num_active_conn < 1) {
             c->thread->num_active_conn = 0;

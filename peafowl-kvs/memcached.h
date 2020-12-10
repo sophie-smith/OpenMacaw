@@ -336,6 +336,11 @@ struct thread_stats {
     uint64_t read_buf_bytes_free;
 };
 
+/* DVFS Related Functions */
+void enable_dvfs_decrease(int id);
+void enable_dvfs_increase(int id);
+void disable_dvfs(int id);
+
 /**
  * Global stats. Only resettable stats should go into this structure.
  */

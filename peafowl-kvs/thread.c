@@ -70,7 +70,7 @@ typedef enum arch {
 } arch_t;
 
 /* Select current architecture to use */
-arch_t current_arch = ARCHITECTURE_THREE;
+arch_t current_arch = ARCHITECTURE_ONE;
 
 /* Define type of cores we're using for heterogeneous architecture */
 typedef enum core {
@@ -88,19 +88,10 @@ typedef enum scaledown {
 /* Current used scale down algorithm */
 scaledown_t scaledown_mode = CLASSIC;
 
-typedef struct core_info {
-    core_t id;
-    /* Power consumption value associated with each core, lower value
-     * associated with a smaller (slower) core */
-    int power_consumption;
-
-    /* Estimate performance for each core, basically large implies gets
-     * more work done or work completed quicker */
-    int performance;
-} core_info_t;
+extern bool dvfs_testing;
 
 /* Array to store type of core, used in create_worker */
-core_info_t *thread_types;
+extern core_info_t *thread_types;
 
 /* Number of workers */
 int num_threads;
@@ -113,7 +104,6 @@ void *scheduler_routine(void *args);
 void alarm_handler(int arg);
 void medium_handler(int arg);
 void slow_handler(int arg) ;
-
 
 /** TODO: determine if signal masks are necessary? Don't want 
  *  to block unnecessary signals in case used elsewhere? */
@@ -634,6 +624,11 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                 }
             }
 
+            if (dvfs_testing) {
+                /* Disable DVFS for the scale down worker */
+                disable_dvfs(peafowl.scale_down_worker);
+            }
+
 
             /* Compute the total capacity */
             total_capacity = 0;
@@ -1042,6 +1037,13 @@ static void thread_libevent_process(evutil_socket_t fd, short which, void *arg) 
                         c->thread->active = true;
                     }
 
+                    /* Enable DVFS with increase in load */
+                    if (dvfs_testing) {
+                        if (c->thread->current_load > 0.5 * c->thread->peak_load) {
+                            enable_dvfs_increase(c->thread->index);
+                        }
+                    }
+
                     // set the libevent for the connection
                     c->ev_flags = EV_READ | EV_PERSIST;
                     //printf ("^^^^^ IN attacker: %d ---  accepting conn %d , conn state: %d  ",me->index, c->sfd, c->state);
@@ -1087,6 +1089,13 @@ static void thread_libevent_process(evutil_socket_t fd, short which, void *arg) 
                     c->thread->num_active_conn ++;
                     if(!c->thread->active) {
                         c->thread->active = true;
+                    }
+
+                    /* Enable DVFS with increase in load */
+                    if (dvfs_testing) {
+                        if (c->thread->current_load > 0.5 * c->thread->peak_load) {
+                            enable_dvfs_increase(c->thread->index);
+                        }
                     }
 
                     //This worker just got one of his/her connections back home
@@ -1528,9 +1537,9 @@ void memcached_thread_init(int nthreads, void *arg) {
 
     /* Define power consumption values */
     /** TODO: decide on these constants here */
-    const int slow_power = 100;
-    const int medium_power = 200;
-    const int fast_power = 400;
+    const int slow_power = 50;
+    const int medium_power = 75;
+    const int fast_power = 100;
 
     /* Create threads after we've done all the libevent setup. */
     for (i = 0; i < nthreads; i++) {
@@ -1595,12 +1604,74 @@ void slow_handler(int arg)
 {
     printf("Slow Core: entered slow handler.\n");
 
-    /* Sleep for long amount of time */
-    struct timespec sleep_time;
-    sleep_time.tv_sec = 5;
-    sleep_time.tv_nsec = 0;
+    pthread_t curr_thread_id = pthread_self();
+    int curr_id = 0;
 
+    /* Find index in array of threads */
+    for (int i = 0; i < num_threads; i++) {
+        if (threads[i].thread_id == curr_thread_id) {
+            curr_id = i;
+            break;
+        }
+    }
+
+    dvfs_mode_t curr_dvfs_mode = thread_types[curr_id].dvfs_mode;
+
+    /* Amount of time to sleep for */
+    struct timespec sleep_time;
+
+    switch (thread_types[curr_id].id) {
+        case FAST_CORE:
+            if (curr_dvfs_mode == NO_DVFS) {
+                sleep_time.tv_sec = 1;
+                sleep_time.tv_nsec = 0;
+            } else if (curr_dvfs_mode == LESS_DVFS) {
+                /* Need to enable DVFS */
+                sleep_time.tv_sec = 1;
+                sleep_time.tv_nsec = thread_types[curr_id].dvfs_scale;
+            } else {
+                sleep_time.tv_sec = 0;
+                sleep_time.tv_nsec = 999999999 - thread_types[curr_id].dvfs_scale;
+            }
+            break;
+        case MEDIUM_CORE:
+            if (curr_dvfs_mode == NO_DVFS) {
+                sleep_time.tv_sec = 3;
+                sleep_time.tv_nsec = 0;
+            } else if (curr_dvfs_mode == LESS_DVFS) {
+                /* Need to enable DVFS */
+                sleep_time.tv_sec = 3;
+                sleep_time.tv_nsec = thread_types[curr_id].dvfs_scale;
+            } else {
+                sleep_time.tv_sec = 2;
+                sleep_time.tv_nsec = 999999999 - thread_types[curr_id].dvfs_scale;
+            }
+            break;
+        case SLOW_CORE:
+            if (curr_dvfs_mode == NO_DVFS){
+                sleep_time.tv_sec = 6;
+                sleep_time.tv_nsec = 0;
+            } else if (curr_dvfs_mode == LESS_DVFS) {
+                /* Need to enable DVFS */
+                sleep_time.tv_sec = 6;
+                sleep_time.tv_nsec = thread_types[curr_id].dvfs_scale;
+            } else {
+                sleep_time.tv_sec = 5;
+                sleep_time.tv_nsec = 999999999 - thread_types[curr_id].dvfs_scale;
+            }
+            break;
+        default:
+            print("Unknown core type.\n");
+    }
+
+    /* Sleep the configured amount of time */
     nanosleep(&sleep_time, NULL);
+    
+    /* Gradually adjust DVFS value */
+    thread_types[curr_id].dvfs_scale *= 1000;
+    if (thread_types[curr_id].dvfs_scale > 999999999) {
+        thread_types[curr_id].dvfs_scale = 999999999;
+    }
 
 }
 
@@ -1623,17 +1694,19 @@ void alarm_handler(int arg)
 
     for (int i = 0; i < num_threads; i++) {
         printf("Sending signal to thread %d.\n", i);
-        // if (alarm_received % 2 == 0) {
-            if (thread_types[i].id == SLOW_CORE) {
-                printf("Sent SIGUSR1 to %d\n", i);
-                pthread_kill(threads[i].thread_id, SIGUSR1);
-            }
+
+        /* Send to all cores, just each core type will now handle differently */
+        pthread_kill(threads[i].thread_id, SIGUSR1);
+
+        // if (thread_types[i].id == SLOW_CORE) {
+        //     printf("Sent SIGUSR1 to %d\n", i);
+        //     pthread_kill(threads[i].thread_id, SIGUSR1);
         // }
 
-        if (thread_types[i].id == MEDIUM_CORE) {
-            printf("Sent SIGUSR2 to %d\n", i);
-            pthread_kill(threads[i].thread_id, SIGUSR2);
-        }
+        // if (thread_types[i].id == MEDIUM_CORE) {
+        //     printf("Sent SIGUSR2 to %d\n", i);
+        //     pthread_kill(threads[i].thread_id, SIGUSR2);
+        // }
     }
         
     alarm_received++;
