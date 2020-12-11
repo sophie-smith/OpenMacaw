@@ -81,6 +81,11 @@ typedef enum scaledown {
 /* Current used scale down algorithm */
 scaledown_t scaledown_mode = PERFORMANCE;
 
+typedef enum new_connection {
+    ROUND_ROBIN, /* Original round-robin assignment of new connections */
+    HET_LOAD_BALANCING /* Providing new requests to the faster core */
+} new_connection_t;
+
 /* Currently used type of assignment for new connections */
 new_connection_t new_connections_mode = HET_LOAD_BALANCING;
 
