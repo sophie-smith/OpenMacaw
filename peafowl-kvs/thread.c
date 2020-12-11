@@ -541,6 +541,7 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
     double selected_energy;
     int selected_spare;
     double curr_finish_time;
+    double optimal_load;
 
     switch (buf[0]) {
         case 'u':
@@ -609,23 +610,33 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                     case PERFORMANCE:
                         /* Scale down worker selected as the worker with the latest finish time since that's
                          * assumed to slow overall completion time of all cores */
-                        max_finish_time = 0.0;
-                        for (int i = 0; i < settings.num_threads; i++) {
-                            if (threads[i].active  &&  threads[i].idle_state_enabled) {
-                                cpuidle_states_disable(i+1,1);
-                                threads[i].idle_state_enabled = false;
-                            }
+                        // max_finish_time = 0.0;
+                        // for (int i = 0; i < settings.num_threads; i++) {
+                        //     if (threads[i].active  &&  threads[i].idle_state_enabled) {
+                        //         cpuidle_states_disable(i+1,1);
+                        //         threads[i].idle_state_enabled = false;
+                        //     }
 
-                            /* Calculate the finish time and keep track of max */
-                            curr_finish_time = threads[i].current_load / 
-                                ((double)thread_types[i].performance);
+                        //     /* Calculate the finish time and keep track of max */
+                        //     curr_finish_time = threads[i].current_load / 
+                        //         ((double)thread_types[i].performance / 2);
 
-                            if (curr_finish_time > max_finish_time) {
-                                max_finish_time = curr_finish_time;
-                                /* Update scale down worker to new worker with greater finish time */
+                        //     if (curr_finish_time > max_finish_time) {
+                        //         max_finish_time = curr_finish_time;
+                        //         /* Update scale down worker to new worker with greater finish time */
+                        //         peafowl.scale_down_worker = i;
+                        //     }
+                        // }
+
+                        /* Try to change to use the core with least load to better account
+                         * for scheduling overhead, etc. */
+                        for (int i = 0; i < num_threads; i++) {
+                            if (threads[i].current_load < threads[peafowl.scale_down_worker].current_load) {
                                 peafowl.scale_down_worker = i;
+                                continue;
                             }
                         }
+
 
                         break;
                     default:
@@ -695,21 +706,36 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                 case PERFORMANCE:
                     /* Assign connections to workers by approximating the latest finish 
                      * time of the workers */
-                    max_finish_time = 0.0;
+
+                    optimal_load = threads[peafowl.destination_worker].current_load;
+
+                    max_finish_time = optimal_load; /* Default starting value */
 
                     for (int j = 0; j < settings.num_threads; j++) {
                         if (!threads[j].active || j == peafowl.scale_down_worker
                             || threads[j].ignored_time_window < 1) continue;
 
-                        /* Compute finish time of current worker, compare to greatest
-                         * which would be the currently set destination worker */
-                        curr_finish_time = threads[j].current_load / 
-                            ((double)thread_types[j].performance);
-                        
-                        if (curr_finish_time > max_finish_time) {
-                            max_finish_time = curr_finish_time;
-                            peafowl.destination_worker = j;
+                        int lower_bound = optimal_load - (optimal_load / 4);
+                        int upper_bound = optimal_load + (optimal_load / 4);
+
+                        int curr_load = threads[j].current_load;
+
+                        if (lower_bound <= curr_load && curr_load <= upper_bound) {
+                            /* Compute finish time of current worker, compare to greatest
+                             * which would be the currently set destination worker */
+
+                            /* Divide by 2 to lessen the weight of the performance factor in 
+                             * calculation since that may be overly optimistic */
+                            curr_finish_time = threads[j].current_load / 
+                                ((double)thread_types[j].performance / 2);
+                            
+                            /* Switch to search for least finish time */
+                            if (curr_finish_time < max_finish_time) {
+                                max_finish_time = curr_finish_time;
+                                peafowl.destination_worker = j;
+                            }
                         }
+
                     }
 
                     break;
@@ -1528,9 +1554,9 @@ void memcached_thread_init(int nthreads, void *arg) {
 
     /* Define power consumption values */
     /** TODO: decide on these constants here */
-    const int slow_power = 100;
-    const int medium_power = 200;
-    const int fast_power = 400;
+    const int slow_power = 50;
+    const int medium_power = 75;
+    const int fast_power = 100;
 
     /* Create threads after we've done all the libevent setup. */
     for (i = 0; i < nthreads; i++) {
@@ -1623,12 +1649,10 @@ void alarm_handler(int arg)
 
     for (int i = 0; i < num_threads; i++) {
         printf("Sending signal to thread %d.\n", i);
-        // if (alarm_received % 2 == 0) {
-            if (thread_types[i].id == SLOW_CORE) {
-                printf("Sent SIGUSR1 to %d\n", i);
-                pthread_kill(threads[i].thread_id, SIGUSR1);
-            }
-        // }
+        if (thread_types[i].id == SLOW_CORE) {
+            printf("Sent SIGUSR1 to %d\n", i);
+            pthread_kill(threads[i].thread_id, SIGUSR1);
+        }
 
         if (thread_types[i].id == MEDIUM_CORE) {
             printf("Sent SIGUSR2 to %d\n", i);
