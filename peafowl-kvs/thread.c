@@ -79,7 +79,10 @@ typedef enum scaledown {
 } scaledown_t;
 
 /* Current used scale down algorithm */
-scaledown_t scaledown_mode = CLASSIC;
+scaledown_t scaledown_mode = PERFORMANCE;
+
+/* Currently used type of assignment for new connections */
+new_connection_t new_connections_mode = HET_LOAD_BALANCING;
 
 extern bool dvfs_testing;
 
@@ -1188,7 +1191,7 @@ void dispatch_conn_new(int sfd, enum conn_states init_state, int event_flags,
         case ROUND_ROBIN:
             tid = (last_thread + 1) % settings.num_threads;
             break;
-        case HET_LOAD_BALANCING: {
+        case HET_LOAD_BALANCING:
 
             /* Give priority to the faster core, using load as a tie breaker */
             for (int i = 0; i < settings.num_threads; i++) {
@@ -1199,7 +1202,7 @@ void dispatch_conn_new(int sfd, enum conn_states init_state, int event_flags,
                     continue;
                 }
             }
-        }
+            break;
         default:
             printf("Invalid new requests assignment mode selected.\n");
             break;
