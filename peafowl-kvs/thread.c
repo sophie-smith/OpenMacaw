@@ -939,7 +939,26 @@ void send_conn_home(conn *c) {
         printf("connection event_set cannot be deleted");
         return;
     }
-    LIBEVENT_THREAD *thread = threads + c->home;
+
+    
+
+    LIBEVENT_THREAD *thread = NULL;
+    int min = c->thread->current_load;
+    int idx = -1;
+
+    /** Macaw scale up send to minimum load */
+
+    for(int i = 0; i < num_threads; i++){
+        if(threads[i].current_load < min && threads[i].active) {
+            min = threads[i].current_load;
+            idx = i;
+            break;
+        }
+    }
+    
+
+    //LIBEVENT_THREAD *thread = threads + c->home;
+    thread = &threads[idx];
     c->thread = thread;
     c->is_guest = false;
 
