@@ -336,6 +336,42 @@ struct thread_stats {
     uint64_t read_buf_bytes_free;
 };
 
+/* DVFS Related Functions */
+void enable_dvfs_decrease(int id);
+void enable_dvfs_increase(int id);
+void disable_dvfs(int id);
+
+/* Value used to tell if no dvfs, increase frequency, 
+ * or decrease frequency as part of dvfs is enabled */
+typedef enum dvfs_mode {
+    LESS_DVFS, /* Decrease core frequency */
+    MORE_DVFS, /* Increase core frequency */
+    NO_DVFS /* Don't use DVFS */
+} dvfs_mode_t;
+
+/* Define type of cores we're using for heterogeneous architecture */
+typedef enum core {
+    SLOW_CORE,
+    MEDIUM_CORE, 
+    FAST_CORE
+} core_t;
+
+typedef struct core_info {
+    core_t id;
+    /* Power consumption value associated with each core, lower value
+     * associated with a smaller (slower) core */
+    int power_consumption;
+
+    /* Estimate performance for each core, basically large implies gets
+     * more work done or work completed quicker */
+    int performance;
+
+    dvfs_mode_t dvfs_setting;
+    int dvfs_scale;
+} core_info_t;
+
+
+
 /**
  * Global stats. Only resettable stats should go into this structure.
  */
