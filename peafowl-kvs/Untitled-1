@@ -70,7 +70,14 @@ typedef enum arch {
 } arch_t;
 
 /* Select current architecture to use */
-arch_t current_arch = ARCHITECTURE_ONE;
+arch_t current_arch = ARCHITECTURE_THREE;
+
+/* Define type of cores we're using for heterogeneous architecture */
+typedef enum core {
+    SLOW_CORE,
+    MEDIUM_CORE,
+    FAST_CORE
+} core_t;
 
 typedef enum scaledown {
     CLASSIC, /* Original scale down algorithm */
@@ -81,10 +88,27 @@ typedef enum scaledown {
 /* Current used scale down algorithm */
 scaledown_t scaledown_mode = CLASSIC;
 
-extern bool dvfs_testing;
+typedef enum new_connection {
+    ROUND_ROBIN, /* Original round-robin assignment of new connections */
+    HET_LOAD_BALANCING /* Providing new requests to the faster core */
+} new_connection_t;
+
+/* Currently used type of assignment for new connections */
+new_connection_t new_connections_mode = HET_LOAD_BALANCING;
+
+typedef struct core_info {
+    core_t id;
+    /* Power consumption value associated with each core, lower value
+     * associated with a smaller (slower) core */
+    int power_consumption;
+
+    /* Estimate performance for each core, basically large implies gets
+     * more work done or work completed quicker */
+    int performance;
+} core_info_t;
 
 /* Array to store type of core, used in create_worker */
-extern core_info_t *thread_types;
+core_info_t *thread_types;
 
 /* Number of workers */
 int num_threads;
@@ -98,7 +122,8 @@ void alarm_handler(int arg);
 void medium_handler(int arg);
 void slow_handler(int arg) ;
 
-/** TODO: determine if signal masks are necessary? Don't want 
+
+/** TODO: determine if signal masks are necessary? Don't want
  *  to block unnecessary signals in case used elsewhere? */
 
 /* Locks for cache LRU operations */
@@ -524,7 +549,6 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
     double selected_energy;
     int selected_spare;
     double curr_finish_time;
-    double optimal_load;
 
     switch (buf[0]) {
         case 'u':
@@ -593,44 +617,29 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                     case PERFORMANCE:
                         /* Scale down worker selected as the worker with the latest finish time since that's
                          * assumed to slow overall completion time of all cores */
-                        // max_finish_time = 0.0;
-                        // for (int i = 0; i < settings.num_threads; i++) {
-                        //     if (threads[i].active  &&  threads[i].idle_state_enabled) {
-                        //         cpuidle_states_disable(i+1,1);
-                        //         threads[i].idle_state_enabled = false;
-                        //     }
+                        max_finish_time = 0.0;
+                        for (int i = 0; i < settings.num_threads; i++) {
+                            if (threads[i].active  &&  threads[i].idle_state_enabled) {
+                                cpuidle_states_disable(i+1,1);
+                                threads[i].idle_state_enabled = false;
+                            }
 
-                        //     /* Calculate the finish time and keep track of max */
-                        //     curr_finish_time = threads[i].current_load / 
-                        //         ((double)thread_types[i].performance / 2);
+                            /* Calculate the finish time and keep track of max */
+                            curr_finish_time = threads[i].current_load /
+                                ((double)thread_types[i].performance);
 
-                        //     if (curr_finish_time > max_finish_time) {
-                        //         max_finish_time = curr_finish_time;
-                        //         /* Update scale down worker to new worker with greater finish time */
-                        //         peafowl.scale_down_worker = i;
-                        //     }
-                        // }
-
-                        /* Try to change to use the core with least load to better account
-                         * for scheduling overhead, etc. */
-                        for (int i = 0; i < num_threads; i++) {
-                            if (threads[i].current_load < threads[peafowl.scale_down_worker].current_load) {
+                            if (curr_finish_time > max_finish_time) {
+                                max_finish_time = curr_finish_time;
+                                /* Update scale down worker to new worker with greater finish time */
                                 peafowl.scale_down_worker = i;
-                                continue;
                             }
                         }
-
 
                         break;
                     default:
                         printf("Invalid scaledown mode selected.\n");
                         break;
                 }
-            }
-
-            if (dvfs_testing) {
-                /* Disable DVFS for the scale down worker */
-                disable_dvfs(peafowl.scale_down_worker);
             }
 
 
@@ -694,36 +703,21 @@ static void peafowl_libevent_process(evutil_socket_t fd, short which, void *arg)
                 case PERFORMANCE:
                     /* Assign connections to workers by approximating the latest finish
                      * time of the workers */
-
-                    optimal_load = threads[peafowl.destination_worker].current_load;
-
-                    max_finish_time = optimal_load; /* Default starting value */
+                    max_finish_time = 0.0;
 
                     for (int j = 0; j < settings.num_threads; j++) {
                         if (!threads[j].active || j == peafowl.scale_down_worker
                             || threads[j].ignored_time_window < 1) continue;
 
-                        int lower_bound = optimal_load - (optimal_load / 4);
-                        int upper_bound = optimal_load + (optimal_load / 4);
+                        /* Compute finish time of current worker, compare to greatest
+                         * which would be the currently set destination worker */
+                        curr_finish_time = threads[j].current_load /
+                            ((double)thread_types[j].performance);
 
-                        int curr_load = threads[j].current_load;
-
-                        if (lower_bound <= curr_load && curr_load <= upper_bound) {
-                            /* Compute finish time of current worker, compare to greatest
-                             * which would be the currently set destination worker */
-
-                            /* Divide by 2 to lessen the weight of the performance factor in 
-                             * calculation since that may be overly optimistic */
-                            curr_finish_time = threads[j].current_load / 
-                                ((double)thread_types[j].performance / 2);
-                            
-                            /* Switch to search for least finish time */
-                            if (curr_finish_time < max_finish_time) {
-                                max_finish_time = curr_finish_time;
-                                peafowl.destination_worker = j;
-                            }
+                        if (curr_finish_time > max_finish_time) {
+                            max_finish_time = curr_finish_time;
+                            peafowl.destination_worker = j;
                         }
-
                     }
 
                     break;
@@ -1056,13 +1050,6 @@ static void thread_libevent_process(evutil_socket_t fd, short which, void *arg) 
                         c->thread->active = true;
                     }
 
-                    /* Enable DVFS with increase in load */
-                    if (dvfs_testing) {
-                        if (c->thread->current_load > 0.5 * c->thread->peak_load) {
-                            enable_dvfs_increase(c->thread->index);
-                        }
-                    }
-
                     // set the libevent for the connection
                     c->ev_flags = EV_READ | EV_PERSIST;
                     //printf ("^^^^^ IN attacker: %d ---  accepting conn %d , conn state: %d  ",me->index, c->sfd, c->state);
@@ -1108,13 +1095,6 @@ static void thread_libevent_process(evutil_socket_t fd, short which, void *arg) 
                     c->thread->num_active_conn ++;
                     if(!c->thread->active) {
                         c->thread->active = true;
-                    }
-
-                    /* Enable DVFS with increase in load */
-                    if (dvfs_testing) {
-                        if (c->thread->current_load > 0.5 * c->thread->peak_load) {
-                            enable_dvfs_increase(c->thread->index);
-                        }
                     }
 
                     //This worker just got one of his/her connections back home
@@ -1192,12 +1172,27 @@ void dispatch_conn_new(int sfd, enum conn_states init_state, int event_flags,
 
             /* Give priority to the faster core, using load as a tie breaker */
             for (int i = 0; i < settings.num_threads; i++) {
+		printf("i=%d, tid=%d, i:current_load=%f, i:performance=%d, tid:current_load=%f, tid:performance=%d\n", i, tid, threads[i].current_load, thread_types[i].performance, threads[tid].current_load, thread_types[tid].performance);
                 /* Compute scaling comparison */
                 if ((threads[i].current_load / ((double)thread_types[i].performance)) <
                     (threads[tid].current_load / ((double)thread_types[i].performance))) {
                     tid = i;
-                    continue;
+     		    continue;
                 }
+
+                // /* If we come across a faster core, prioritize */
+                // if (thread_types[i].id > thread_types[tid].id) {
+                //     tid = i;
+                //     continue;
+                // }
+
+                // /* Coming across same core type - use least load as tie breaker */
+                // if (thread_types[i].id == thread_types[tid].id) {
+                //     if (threads[i].current_load < threads[tid].current_load) {
+                //         tid = i;
+                //         continue;
+                //     }
+                // }
             }
         }
         default:
@@ -1644,77 +1639,12 @@ void slow_handler(int arg)
 {
     printf("Slow Core: entered slow handler.\n");
 
-    pthread_t curr_thread_id = pthread_self();
-    int curr_id = 0;
-
-    /* Find index in array of threads */
-    for (int i = 0; i < num_threads; i++) {
-        if (threads[i].thread_id == curr_thread_id) {
-            curr_id = i;
-            break;
-        }
-    }
-
-    dvfs_mode_t curr_dvfs_mode = thread_types[curr_id].dvfs_setting;
-
-    /* Amount of time to sleep for */
+    /* Sleep for long amount of time */
     struct timespec sleep_time;
+    sleep_time.tv_sec = 5;
+    sleep_time.tv_nsec = 0;
 
-    printf("Thread %d has dvfs scale of %d with mode %d\n", curr_id, thread_types[curr_id].dvfs_scale, curr_dvfs_mode);
-
-    switch (thread_types[curr_id].id) {
-        case FAST_CORE:
-            if (curr_dvfs_mode == NO_DVFS) {
-                sleep_time.tv_sec = 1;
-                sleep_time.tv_nsec = 0;
-            } else if (curr_dvfs_mode == LESS_DVFS) {
-                /* Need to enable DVFS */
-                sleep_time.tv_sec = 1;
-                sleep_time.tv_nsec = thread_types[curr_id].dvfs_scale;
-            } else {
-                sleep_time.tv_sec = 0;
-                sleep_time.tv_nsec = 999999999 - thread_types[curr_id].dvfs_scale;
-            }
-            break;
-        case MEDIUM_CORE:
-            if (curr_dvfs_mode == NO_DVFS) {
-                sleep_time.tv_sec = 3;
-                sleep_time.tv_nsec = 0;
-            } else if (curr_dvfs_mode == LESS_DVFS) {
-                /* Need to enable DVFS */
-                sleep_time.tv_sec = 3;
-                sleep_time.tv_nsec = thread_types[curr_id].dvfs_scale;
-            } else {
-                sleep_time.tv_sec = 2;
-                sleep_time.tv_nsec = 999999999 - thread_types[curr_id].dvfs_scale;
-            }
-            break;
-        case SLOW_CORE:
-            if (curr_dvfs_mode == NO_DVFS){
-                sleep_time.tv_sec = 6;
-                sleep_time.tv_nsec = 0;
-            } else if (curr_dvfs_mode == LESS_DVFS) {
-                /* Need to enable DVFS */
-                sleep_time.tv_sec = 6;
-                sleep_time.tv_nsec = thread_types[curr_id].dvfs_scale;
-            } else {
-                sleep_time.tv_sec = 5;
-                sleep_time.tv_nsec = 999999999 - thread_types[curr_id].dvfs_scale;
-            }
-            break;
-        default:
-            printf("Unknown core type.\n");
-    }
-
-    /* Sleep the configured amount of time */
     nanosleep(&sleep_time, NULL);
-    
-    /* Gradually adjust DVFS value */
-    if (thread_types[curr_id].dvfs_scale >= (999000000)) {
-        thread_types[curr_id].dvfs_scale = 999999999;
-    } else {
-        thread_types[curr_id].dvfs_scale *= 1000;
-    }
 
 }
 
@@ -1737,19 +1667,17 @@ void alarm_handler(int arg)
 
     for (int i = 0; i < num_threads; i++) {
         printf("Sending signal to thread %d.\n", i);
-
-        /* Send to all cores, just each core type will now handle differently */
-        pthread_kill(threads[i].thread_id, SIGUSR1);
-
-        // if (thread_types[i].id == SLOW_CORE) {
-        //     printf("Sent SIGUSR1 to %d\n", i);
-        //     pthread_kill(threads[i].thread_id, SIGUSR1);
+        // if (alarm_received % 2 == 0) {
+            if (thread_types[i].id == SLOW_CORE) {
+                printf("Sent SIGUSR1 to %d\n", i);
+                pthread_kill(threads[i].thread_id, SIGUSR1);
+            }
         // }
 
-        // if (thread_types[i].id == MEDIUM_CORE) {
-        //     printf("Sent SIGUSR2 to %d\n", i);
-        //     pthread_kill(threads[i].thread_id, SIGUSR2);
-        // }
+        if (thread_types[i].id == MEDIUM_CORE) {
+            printf("Sent SIGUSR2 to %d\n", i);
+            pthread_kill(threads[i].thread_id, SIGUSR2);
+        }
     }
 
     alarm_received++;
